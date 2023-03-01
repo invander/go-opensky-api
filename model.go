@@ -30,8 +30,8 @@ type Flight struct {
 type unstructuredTrackResponse struct {
 	Icao24    string          `json:"icao24"`
 	Callsign  string          `json:"callsign"`
-	StartTime int64           `json:"startTime"`
-	EndTime   int64           `json:"endTime"`
+	StartTime float64         `json:"startTime"`
+	EndTime   float64         `json:"endTime"`
 	Paths     [][]interface{} `json:"path"`
 }
 

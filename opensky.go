@@ -233,8 +233,8 @@ func (c *Client) GetTrackByAircraft(icao24 string, time time.Time) (response Get
 func parseTracksResponse(rawResponse unstructuredTrackResponse) (response GetTracksResponse, err error) {
 	response.Icao24 = rawResponse.Icao24
 	response.Callsign = rawResponse.Callsign
-	response.StartTime = time.Unix(rawResponse.StartTime, 0)
-	response.EndTime = time.Unix(rawResponse.EndTime, 0)
+	response.StartTime = time.Unix(int64(rawResponse.StartTime), 0)
+	response.EndTime = time.Unix(int64(rawResponse.EndTime), 0)
 	// Parse state vectors
 	for i, s := range rawResponse.Paths {
 		var waypoint Waypoint
