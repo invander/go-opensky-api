@@ -570,3 +570,287 @@ func TestDoHTTP_EmptyResponseOn200(t *testing.T) {
 		t.Errorf("expected empty slice, got %d items", len(flights))
 	}
 }
+
+// --- countUTCDates ---
+
+func TestCountUTCDates(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		begin int64
+		end   int64
+		want  int
+	}{
+		{"same_day", 1700000000, 1700003600, 0},
+		// 1700002800 = Nov 14 2023 23:00 UTC, 1700010000 = Nov 15 2023 01:00 UTC
+		{"midnight_boundary", 1700002800, 1700010000, 1},
+		{"one_full_day", 1700000000, 1700086400, 1},
+		{"two_days", 1700000000, 1700172800, 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := countUTCDates(tt.begin, tt.end)
+			if got != tt.want {
+				t.Errorf("countUTCDates(%d, %d) = %d, want %d", tt.begin, tt.end, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- GetFlights validation ---
+
+func TestGetFlights_Validation(t *testing.T) {
+	t.Parallel()
+
+	client := NewClient()
+	now := time.Now()
+
+	tests := []struct {
+		name    string
+		begin   time.Time
+		end     time.Time
+		wantErr bool
+	}{
+		{"begin_equals_end", now, now, true},
+		{"begin_after_end", now.Add(time.Hour), now, true},
+		{"exceeds_2h", now, now.Add(3 * time.Hour), true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := client.GetFlights(tt.begin, tt.end)
+			if tt.wantErr && err == nil {
+				t.Error("expected validation error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// --- GetFlightsByAircraft validation ---
+
+func TestGetFlightsByAircraft_Validation(t *testing.T) {
+	t.Parallel()
+
+	client := NewClient()
+	now := time.Now()
+
+	tests := []struct {
+		name    string
+		begin   time.Time
+		end     time.Time
+		wantErr bool
+	}{
+		{"begin_equals_end", now, now, true},
+		{"begin_after_end", now.Add(time.Hour), now, true},
+		{"exceeds_2d", now, now.Add(49 * time.Hour), true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := client.GetFlightsByAircraft("abc123", tt.begin, tt.end)
+			if tt.wantErr && err == nil {
+				t.Error("expected validation error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// --- GetFlightsByArrival validation ---
+
+func TestGetFlightsByArrival_Validation(t *testing.T) {
+	t.Parallel()
+
+	client := NewClient()
+	// Midnight UTC so we control the UTC day boundary precisely.
+	day0 := time.Date(2024, 1, 10, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name    string
+		begin   time.Time
+		end     time.Time
+		wantErr bool
+	}{
+		{"crosses_two_day_boundaries", day0, day0.Add(49 * time.Hour), true},
+		{"begin_equals_end", day0, day0, true},
+		{"begin_after_end", day0.Add(time.Hour), day0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := client.GetFlightsByArrival("EDDF", tt.begin, tt.end)
+			if tt.wantErr && err == nil {
+				t.Error("expected validation error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// --- GetFlightsByDeparture validation ---
+
+func TestGetFlightsByDeparture_Validation(t *testing.T) {
+	t.Parallel()
+
+	client := NewClient()
+	day0 := time.Date(2024, 1, 10, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name    string
+		begin   time.Time
+		end     time.Time
+		wantErr bool
+	}{
+		{"crosses_two_day_boundaries", day0, day0.Add(49 * time.Hour), true},
+		{"begin_equals_end", day0, day0, true},
+		{"begin_after_end", day0.Add(time.Hour), day0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := client.GetFlightsByDeparture("EDDF", tt.begin, tt.end)
+			if tt.wantErr && err == nil {
+				t.Error("expected validation error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// --- GetTrackByAircraft validation ---
+
+func TestGetTrackByAircraft_TooOld(t *testing.T) {
+	t.Parallel()
+
+	client := NewClient()
+	tooOld := time.Now().Add(-31 * 24 * time.Hour)
+
+	_, err := client.GetTrackByAircraft("abc123", tooOld)
+	if err == nil {
+		t.Fatal("expected error for track older than 30 days, got nil")
+	}
+}
+
+func TestGetTrackByAircraft_ZeroTimeAllowed(t *testing.T) {
+	t.Parallel()
+
+	srv := setupMux(map[string]http.HandlerFunc{
+		"/tracks/all": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		},
+	})
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+
+	req, _ := client.newRequest("GET", srv.URL+"/tracks/all")
+	var raw unstructuredTrackResponse
+	err := client.doHTTP(req, &raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGetTrackByAircraft_UsesTracksAllEndpoint(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	srv := setupMux(map[string]http.HandlerFunc{
+		"/tracks/all": func(w http.ResponseWriter, r *http.Request) {
+			called = true
+			w.WriteHeader(http.StatusNotFound)
+		},
+	})
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+
+	req, _ := client.newRequest("GET", srv.URL+"/tracks/all")
+	var raw unstructuredTrackResponse
+	_ = client.doHTTP(req, &raw)
+
+	if !called {
+		t.Error("expected /tracks/all to be called")
+	}
+}
+
+// --- BoundingBox.Validate ---
+
+func TestBoundingBox_Validate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		bbox    BoundingBox
+		wantErr bool
+	}{
+		{"valid", BoundingBox{LaMin: -90, LaMax: 90, LoMin: -180, LoMax: 180}, false},
+		{"valid_small", BoundingBox{LaMin: 47.0, LaMax: 55.0, LoMin: 5.0, LoMax: 15.0}, false},
+		{"lamin_too_low", BoundingBox{LaMin: -91, LaMax: 90, LoMin: -180, LoMax: 180}, true},
+		{"lamin_too_high", BoundingBox{LaMin: 91, LaMax: 90, LoMin: -180, LoMax: 180}, true},
+		{"lamax_too_high", BoundingBox{LaMin: 0, LaMax: 91, LoMin: 0, LoMax: 0}, true},
+		{"lomin_too_low", BoundingBox{LaMin: 0, LaMax: 0, LoMin: -181, LoMax: 0}, true},
+		{"lomax_too_high", BoundingBox{LaMin: 0, LaMax: 0, LoMin: 0, LoMax: 181}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := tt.bbox.Validate()
+			if tt.wantErr && err == nil {
+				t.Error("expected validation error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// --- GetOwnStates extended param ---
+
+func TestGetOwnStates_ExtendedParam(t *testing.T) {
+	t.Parallel()
+
+	var gotExtended string
+	srv := setupMux(map[string]http.HandlerFunc{
+		"/states/own": func(w http.ResponseWriter, r *http.Request) {
+			gotExtended = r.URL.Query().Get("extended")
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"time":1700000000,"states":[]}`))
+		},
+	})
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+
+	req, _ := client.newRequest("GET", srv.URL+"/states/own")
+	q := req.URL.Query()
+	q.Set("extended", "1")
+	req.URL.RawQuery = q.Encode()
+
+	var raw unstructuredStatesResponse
+	if err := client.doHTTP(req, &raw); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if gotExtended != "1" {
+		t.Errorf("expected extended=1, got %q", gotExtended)
+	}
+}

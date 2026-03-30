@@ -136,11 +136,29 @@ func (c *Client) doHTTP(request *http.Request, responseObject any) (err error) {
 	return nil
 }
 
+// countUTCDates returns the number of UTC calendar days between two Unix timestamps.
+// A window from 23:00 to 01:00 the next day spans 2 calendar dates even though it is
+// only 2 hours long — matching how the OpenSky API counts time intervals.
+func countUTCDates(begin, end int64) int {
+	beginDay := time.Unix(begin, 0).UTC().Truncate(24 * time.Hour)
+	endDay := time.Unix(end, 0).UTC().Truncate(24 * time.Hour)
+	return int(endDay.Sub(beginDay) / (24 * time.Hour))
+}
+
 // GetFlights retrieves all flight information within a certain time interval.
 // Flights departed and arrived within the [begin, end] boundaries will be returned.
+// The interval [begin, end] must be non-empty and must not exceed 2 hours.
 //
 // Returns an empty slice if no flights were found for the given time period.
 func (c *Client) GetFlights(begin time.Time, end time.Time) (flights []Flight, err error) {
+	if !begin.IsZero() && !end.IsZero() {
+		if !begin.Before(end) {
+			return nil, fmt.Errorf("begin must be before end")
+		}
+		if end.Unix()-begin.Unix() > 7200 {
+			return nil, fmt.Errorf("time interval must not exceed 2 hours")
+		}
+	}
 	request, err := c.newRequest("GET", fmt.Sprintf("%s/flights/all", baseOpenSkyURL))
 	if err != nil {
 		return
@@ -161,9 +179,18 @@ func (c *Client) GetFlights(begin time.Time, end time.Time) (flights []Flight, e
 // GetFlightsByAircraft retrieves flight information for a particular aircraft, identified by the icao24 address parameter,
 // within a certain time interval.
 // Flights departed and arrived within the [begin, end] boundaries will be returned.
+// The interval [begin, end] must be non-empty and must not exceed 2 days.
 //
 // Returns an empty slice if no flights were found for the given time period.
 func (c *Client) GetFlightsByAircraft(icao24 string, begin time.Time, end time.Time) (flights []Flight, err error) {
+	if !begin.IsZero() && !end.IsZero() {
+		if !begin.Before(end) {
+			return nil, fmt.Errorf("begin must be before end")
+		}
+		if end.Unix()-begin.Unix() > 172800 {
+			return nil, fmt.Errorf("time interval must not exceed 2 days")
+		}
+	}
 	request, err := c.newRequest("GET", fmt.Sprintf("%s/flights/aircraft", baseOpenSkyURL))
 	if err != nil {
 		return
@@ -193,9 +220,18 @@ func (c *Client) GetFlightsByInterval(begin time.Time, end time.Time) (flights [
 }
 
 // GetFlightsByArrival retrieves flights for a certain airport which arrived within a given time interval [begin, end].
+// The interval must be non-empty and must not span more than 1 UTC calendar day.
 //
 // Returns an empty slice if no flights were found for the given time period.
 func (c *Client) GetFlightsByArrival(airport string, begin time.Time, end time.Time) (flights []Flight, err error) {
+	if !begin.IsZero() && !end.IsZero() {
+		if !begin.Before(end) {
+			return nil, fmt.Errorf("begin must be before end")
+		}
+		if countUTCDates(begin.Unix(), end.Unix()) > 1 {
+			return nil, fmt.Errorf("time interval must not span more than 1 UTC calendar day")
+		}
+	}
 	request, err := c.newRequest("GET", fmt.Sprintf("%s/flights/arrival", baseOpenSkyURL))
 	if err != nil {
 		return
@@ -217,9 +253,18 @@ func (c *Client) GetFlightsByArrival(airport string, begin time.Time, end time.T
 }
 
 // GetFlightsByDeparture retrieves flights for a certain airport which departed within a given time interval [begin, end].
+// The interval must be non-empty and must not span more than 1 UTC calendar day.
 //
 // Returns an empty slice if no flights were found for the given time period.
 func (c *Client) GetFlightsByDeparture(airport string, begin time.Time, end time.Time) (flights []Flight, err error) {
+	if !begin.IsZero() && !end.IsZero() {
+		if !begin.Before(end) {
+			return nil, fmt.Errorf("begin must be before end")
+		}
+		if countUTCDates(begin.Unix(), end.Unix()) > 1 {
+			return nil, fmt.Errorf("time interval must not span more than 1 UTC calendar day")
+		}
+	}
 	request, err := c.newRequest("GET", fmt.Sprintf("%s/flights/departure", baseOpenSkyURL))
 	if err != nil {
 		return
@@ -242,10 +287,14 @@ func (c *Client) GetFlightsByDeparture(airport string, begin time.Time, end time
 
 // GetTrackByAircraft retrieves the trajectory for a certain aircraft at a given time.
 // The trajectory is a list of waypoints containing position, barometric altitude, true track and an on-ground flag.
+// If t is zero, the live track is returned. t must not be more than 30 days in the past.
 //
 // Returns an empty response if no track data was found.
 func (c *Client) GetTrackByAircraft(icao24 string, t time.Time) (response GetTracksResponse, err error) {
-	request, err := c.newRequest("GET", fmt.Sprintf("%s/tracks", baseOpenSkyURL))
+	if !t.IsZero() && time.Since(t) > 30*24*time.Hour {
+		return GetTracksResponse{}, fmt.Errorf("cannot retrieve tracks from more than 30 days in the past")
+	}
+	request, err := c.newRequest("GET", fmt.Sprintf("%s/tracks/all", baseOpenSkyURL))
 	if err != nil {
 		return
 	}
@@ -360,6 +409,9 @@ func (c *Client) GetStates(t time.Time, icao24 []string, bbox *BoundingBox, exte
 		q.Add("icao24", addr)
 	}
 	if bbox != nil {
+		if err = bbox.Validate(); err != nil {
+			return
+		}
 		q.Set("lamin", fmt.Sprintf("%v", bbox.LaMin))
 		q.Set("lomin", fmt.Sprintf("%v", bbox.LoMin))
 		q.Set("lamax", fmt.Sprintf("%v", bbox.LaMax))
@@ -384,7 +436,8 @@ func (c *Client) GetStates(t time.Time, icao24 []string, bbox *BoundingBox, exte
 //   - t: time to retrieve states for (zero value means current time)
 //   - icao24: list of ICAO24 addresses to filter (nil or empty means all aircraft)
 //   - serials: list of receiver serial numbers to filter (nil or empty means all receivers)
-func (c *Client) GetOwnStates(t time.Time, icao24 []string, serials []int) (response StatesResponse, err error) {
+//   - extended: if true, request aircraft category information
+func (c *Client) GetOwnStates(t time.Time, icao24 []string, serials []int, extended bool) (response StatesResponse, err error) {
 	request, err := c.newRequest("GET", fmt.Sprintf("%s/states/own", baseOpenSkyURL))
 	if err != nil {
 		return
@@ -398,6 +451,9 @@ func (c *Client) GetOwnStates(t time.Time, icao24 []string, serials []int) (resp
 	}
 	for _, s := range serials {
 		q.Add("serials", fmt.Sprintf("%d", s))
+	}
+	if extended {
+		q.Set("extended", "1")
 	}
 	request.URL.RawQuery = q.Encode()
 

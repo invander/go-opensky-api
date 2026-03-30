@@ -2,6 +2,7 @@ package opensky
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -144,6 +145,23 @@ type BoundingBox struct {
 	LoMin float64 // lower bound for longitude in decimal degrees
 	LaMax float64 // upper bound for latitude in decimal degrees
 	LoMax float64 // upper bound for longitude in decimal degrees
+}
+
+// Validate checks that all BoundingBox coordinates are within valid WGS-84 ranges.
+func (b BoundingBox) Validate() error {
+	if b.LaMin < -90 || b.LaMin > 90 {
+		return fmt.Errorf("invalid LaMin %f: must be in [-90, 90]", b.LaMin)
+	}
+	if b.LaMax < -90 || b.LaMax > 90 {
+		return fmt.Errorf("invalid LaMax %f: must be in [-90, 90]", b.LaMax)
+	}
+	if b.LoMin < -180 || b.LoMin > 180 {
+		return fmt.Errorf("invalid LoMin %f: must be in [-180, 180]", b.LoMin)
+	}
+	if b.LoMax < -180 || b.LoMax > 180 {
+		return fmt.Errorf("invalid LoMax %f: must be in [-180, 180]", b.LoMax)
+	}
+	return nil
 }
 
 // unstructuredStatesResponse is the raw JSON shape returned by the API.
